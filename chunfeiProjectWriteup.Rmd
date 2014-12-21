@@ -1,0 +1,128 @@
+---
+title: "Project Report By Chunfei Li"
+output: html_document
+---
+
+In the project, three Machine Learning algorithms are used here to choose the final model. They are Random Forest, Boosting and Naive Bayes.
+
+The pipeline to build the model and use it to predict the 10 test cases is:
+
+Step1. Clean the original training dataset
+                1. remove all the almost “empty” columns as well as those with all NAs
+                2. remove columns which are not contributed to the calculation, such as user name, etc.
+                3. remove high correlated columns (for Bayes only)
+                
+Step2. Split the training dataset into training/test sets
+Step3. Based on the training data set, we apply Random Forest, Boosting and Naive Bayes methods respectively to fit the
+        model , then compare their accuracies and pick the method with highest accuracy to build our model.
+                For Naive Bayes Method, we normalize the data first
+Step4. Predict the test set with the fitted model got from the method we chose and calculate the prediction error,
+        which is the out of sample error
+Step5. Clean the testing dataset by choosing columns that training dataset holds after Step1
+Step6. Apply the fitted model on the cleaned testing dataset to do the prediction.
+
+
+Specifically, in step1, the columns that are not contributed to the model consist of X, user name, raw timestap part 1, raw timestamp part 2, cvtd timestamp and new window. The reason we remove the new window column is that, only those with "yes" value have values in some columns, and the rest are empty, since we removed all the almost “empty” columns, the column  new window does not make sense any more. On the other hand, since Naive Bayes assumes independence between features for model building, we remove high correlated columns (>0.9) manually here.
+
+
+```{r}
+library(caret)
+
+testingset <- read.csv("pml-testing.csv")
+training <- read.csv("pml-training.csv")
+
+
+# remove NA and empty columns
+mytraining <- training[,colSums(is.na(training)) < nrow(training)/2 & colSums(training == "") < nrow(training)/2]
+# remove columns not contributed to the calculation
+# such as  X, user_name,raw_timestamp_part_1, raw_timestamp_part_2,cvtd_timestamp, new_window, which is the first 6 columns
+cleanData <- mytraining[,-c(1:6)]
+
+
+# Additional for Bayes
+# remove high correlated ones >0.9
+M <- abs(cor(cleanData[,-54]))
+diag(M) <-0
+which(M >0.9, arr.ind = T)
+BayesData <- cleanData[,-c(5,10,11,9,20,34,47)]
+```
+
+
+
+
+Since the sample size is relatively large, the ratio used to split the training dataset into training/test set is 7/3
+
+```{r}
+set.seed(101)
+inTrain <- createDataPartition(y = cleanData$classe, p =0.7, list=FALSE)
+training <- cleanData[inTrain,]
+testing <- cleanData[-inTrain,]
+
+```
+
+
+
+
+Next, Random Forest, Boosting and Naive Bayes methods are applied separately to fit the model. Considering the relatively large sample size, we use the cross validation method "cv" here to resample the data, and hence picke the variables to include in the specific model, and finally choose the method with the highest accuracy as the prediction function used in building the model. 
+
+
+```{r}
+
+# Random Forest
+library(doMC)
+registerDoMC(cores = 4)
+controlRF <- trainControl(method = "cv", number = 3, allowParallel = TRUE,preProcOptions = c("center","scale"))
+modFitRF <- train(classe~., method = "rf", trControl = controlRF, data=training)
+modFitRF
+
+# BooSting
+modFitBT <- train(classe~., method = "gbm", trControl = controlRF, data=training)
+modFitBT
+
+# Bayes
+# split training set to Trains and Tests
+inTrain <- createDataPartition(y = BayesData$classe, p =0.7, list=FALSE)
+Trains <- BayesData[inTrain,]
+Tests <- BayesData[-inTrain,]
+controlBY <- trainControl(method = "cv", number = 3, allowParallel = TRUE)
+# normalize the Trains
+preObj <- preProcess(Trains[,-47], method = "BoxCox")
+NTrains <- predict(preObj,Trains)
+NTests <- predict(preObj,Tests)
+modFitBY <- train(classe~., method = "nb", trControl = controlBY, data=NTrains)
+modFitBY
+
+
+# Comapare the accuracy
+RF <- modFitRF$results$Accuracy[which(modFitRF$results$mtry == modFitRF$bestTune$mtry)]
+
+BRindex <-as.numeric(rownames(modFitBT$bestTune))
+BT <- modFitBT$results$Accuracy[BRindex]
+
+BYindex <-as.numeric(rownames(modFitBY$bestTune))
+BY <- modFitBY$results$Accuracy[BYindex]
+
+Prediction_Function <- c("Random Forest","Boosting","Naive Bayes")
+Accuracy <- c(RF,BT,BY)
+
+data.frame(Prediction_Function, Accuracy)
+```
+
+
+```{r}
+# out of samples error
+predRF <- predict(modFitRF, newdata = testing)
+confusionMatrix(predRF,testing$classe)
+```
+
+
+As we can see, the accuracy of the Random Forest Model, Boosting Model and Naive Bayes Model is `r RF`, `r BT` and`r BY`, respectively. Thus Random Forest Model is chosen. And the out of sample error is `r 1 - confusionMatrix(predRF,testing$classe)$overall[[1]]`, which suggests that the Random Forest Model is almost prefect.
+
+After doing the clean on the 20 test cases, we use the fitted model above to do the prediction. As the result is shown, the predictions hit all the 20 test cases.
+
+
+```{r}
+# PREDICT THE  20 TEST CASES IN THE TEST DATA USING RANDOM FOREST
+ cleanTestingData <- testingset[,c(names(cleanData[,-54]),"problem_id")]
+ predRF <- predict(modFitRF, newdata = cleanTestingData)
+```
